@@ -17,7 +17,7 @@ sentencepiece
 # Only enable one quantization backend at a time:
 bitsandbytes         # GPU quantized inference (skip if only CPU)
 ctransformers        # GGUF Q4_K_M inference
-llama-cpp-python     # llama.cpp bindings (CPU optimized)
+# llama-cpp-python   # removed: requires compilation, replaced with ctransformers
 
 # PDF / Documents
 pypdf2
