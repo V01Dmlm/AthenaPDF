@@ -1,75 +1,68 @@
-# app.py
-import streamlit as st
+# app.py (Gradio version)
+import gradio as gr
 from backend.chatbot import ChatBot
 from backend.pdf_handler import PDFHandler
 from backend.translator import Translator
 
-# --- Page Setup ---
-st.set_page_config(page_title="AthenaPDF", layout="wide")
-st.title("🤖 AthenaPDF – Your Study Companion")
-
-# --- Initialize Backends ---
 translator = Translator()
 chatbot = ChatBot(model_path="models/mistral-7b-instruct-v0.2.Q4_K_M.gguf")
 pdf_handler = PDFHandler()
 
-# --- Session State ---
-if "history" not in st.session_state:
-    st.session_state.history = []
+def upload_pdf(file):
+    if file is not None:
+        pdf_handler.save_pdf(file)
+        return f"Uploaded: {file.name}"
+    return "No file uploaded."
 
-if "quiz_data" not in st.session_state:
-    st.session_state.quiz_data = None
+def summarize_pdf():
+    context = pdf_handler.get_context("summary", top_k=5)
+    summary = chatbot.summarize(context)
+    return summary
 
-# --- Sidebar: Upload PDFs ---
-st.sidebar.header("📚 Upload Study Material")
-uploaded_file = st.sidebar.file_uploader("Upload a PDF", type=["pdf"])
-if uploaded_file:
-    pdf_handler.save_pdf(uploaded_file)
-    st.sidebar.success(f"Uploaded: {uploaded_file.name}")
+def generate_quiz(num_questions):
+    context = pdf_handler.get_context("quiz", top_k=5)
+    quiz = chatbot.generate_quiz(context, num_questions=num_questions)
+    return quiz
 
-# --- Section 1: Summarize PDFs ---
-st.subheader("📝 Summarize PDFs")
-if st.button("Generate Summary"):
-    with st.spinner("Summarizing..."):
-        context = pdf_handler.get_context("summary", top_k=5)
-        summary = chatbot.summarize(context)
-        st.write(summary)
+def chat(user_input, history):
+    user_lang = translator.detect_language(user_input)
+    translated_input = translator.translate_to_english(user_input)
+    context = pdf_handler.get_context(translated_input)
+    response = chatbot.ask(translated_input, context)
+    if user_lang == "ar":
+        final_response = translator.translate_to_arabic(response)
+    else:
+        final_response = response
+    history = history or []
+    history.append((user_input, final_response))
+    return history, history
 
-# --- Section 2: Interactive Quiz ---
-st.subheader("❓ Generate Interactive Quiz")
-num_questions = st.slider("Number of Questions per Chunk", min_value=3, max_value=10, value=5)
-if st.button("Generate Quiz"):
-    with st.spinner("Generating quiz..."):
-        context = pdf_handler.get_context("quiz", top_k=5)
-        quiz = chatbot.generate_quiz(context, num_questions=num_questions)
-        st.session_state.quiz_data = quiz
-        st.write(quiz)
+with gr.Blocks() as demo:
+    gr.Markdown("# 🤖 AthenaPDF – Your Study Companion")
 
-# --- Section 3: Chat Interface ---
-st.subheader("💬 Ask Questions About Your PDFs")
-user_input = st.text_input("Ask a question about your uploaded PDFs:")
+    with gr.Tab("Upload PDF"):
+        pdf_file = gr.File(label="Upload a PDF", file_types=[".pdf"])
+        upload_btn = gr.Button("Upload")
+        upload_output = gr.Textbox(label="Upload Status", interactive=False)
+        upload_btn.click(upload_pdf, inputs=pdf_file, outputs=upload_output)
 
-if st.button("Ask") and user_input.strip():
-    with st.spinner("Generating response..."):
-        # Detect user language
-        user_lang = translator.detect_language(user_input)
-        # Translate to English for the model
-        translated_input = translator.translate_to_english(user_input)
-        # Get relevant PDF context
-        context = pdf_handler.get_context(translated_input)
-        # Generate model response
-        response = chatbot.ask(translated_input, context)
-        # If user asked in Arabic, translate response back to Arabic
-        if user_lang == "ar":
-            final_response = translator.translate_to_arabic(response)
-        else:
-            final_response = response
-        # Save to chat history
-        st.session_state.history.append((user_input, final_response))
+    with gr.Tab("Summarize PDFs"):
+        summarize_btn = gr.Button("Generate Summary")
+        summary_output = gr.Textbox(label="Summary", lines=10)
+        summarize_btn.click(summarize_pdf, outputs=summary_output)
 
-# --- Display Chat History ---
-if st.session_state.history:
-    st.subheader("Chat History")
-    for user_q, bot_a in st.session_state.history:
-        st.markdown(f"**You:** {user_q}")
-        st.markdown(f"**AthenaPDF:** {bot_a}")
+    with gr.Tab("Generate Quiz"):
+        num_questions = gr.Slider(label="Number of Questions per Chunk", minimum=3, maximum=10, value=5, step=1)
+        quiz_btn = gr.Button("Generate Quiz")
+        quiz_output = gr.Textbox(label="Quiz", lines=10)
+        quiz_btn.click(generate_quiz, inputs=num_questions, outputs=quiz_output)
+
+    with gr.Tab("Ask Questions"):
+        chatbot_ui = gr.Chatbot(label="Chat History")
+        user_input = gr.Textbox(label="Ask a question about your uploaded PDFs:")
+        state = gr.State([])
+        send_btn = gr.Button("Ask")
+        send_btn.click(chat, [user_input, state], [chatbot_ui, state])
+
+if __name__ == "__main__":
+    demo.launch()
