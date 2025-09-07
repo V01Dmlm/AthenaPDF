@@ -44,14 +44,12 @@ class Translator:
             logging.warning(f"⚠️ Translation to Arabic failed: {e}")
             return text
 
-    def translate_auto(self, text: str, target_lang: str = "en") -> str:
+    def detect_language(self, text: str) -> str:
         """
-        Translate text automatically to the specified target language ('en' or 'ar').
+        Detect the language of the input text.
+        Returns language code (e.g., 'en', 'ar').
         """
-        if target_lang.lower() == "en":
-            return self.translate_to_english(text)
-        elif target_lang.lower() == "ar":
-            return self.translate_to_arabic(text)
-        else:
-            logging.warning(f"⚠️ Unsupported target language: {target_lang}")
-            return text
+        try:
+            return detect(text)
+        except Exception:
+            return

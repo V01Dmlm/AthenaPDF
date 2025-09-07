@@ -21,7 +21,7 @@ class ChatBot:
             return "⚠️ Error generating response."
 
     def ask(self, query: str, context: str = "") -> str:
-        max_context_len = 3500
+        max_context_len = 700  # Reduced to help prevent token overflow
         context = context[-max_context_len:]
         prompt = f"""
 You are AthenaPDF, a helpful AI assistant for students.
@@ -29,7 +29,7 @@ Context: {context}
 Question: {query}
 Answer clearly and concisely:
 """
-        return self._call_model(prompt, max_tokens=512, stop=["Question:"])
+        return self._call_model(prompt, max_tokens=256, stop=["Question:"])  # Lowered max_tokens as well
 
     def summarize(self, text: str, max_tokens=300) -> str:
         chunk_size = 1500
