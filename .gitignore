@@ -8,6 +8,3 @@ __pycache__/
 data/uploads/*
 !data/uploads/.gitkeep
 
-# Models
-models/*
-!models/.gitkeep
