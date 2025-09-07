@@ -1,0 +1,78 @@
+# Core Python
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+scikit-learn
+
+# LLM + Model Serving (CPU/GPU options for G5)
+torch          # for embeddings, GPU if available
+torchvision
+torchaudio
+transformers
+sentence-transformers
+accelerate
+sentencepiece
+# Only enable one quantization backend at a time:
+bitsandbytes         # GPU quantized inference (skip if only CPU)
+ctransformers        # GGUF Q4_K_M inference
+llama-cpp-python     # llama.cpp bindings (CPU optimized)
+
+# PDF / Documents
+pypdf2
+pdfplumber
+pymupdf
+pdfminer.six
+python-docx
+unstructured
+langchain
+
+# Vector Databases (for RAG/Q&A)
+faiss-cpu
+chromadb
+# Optional cloud connectors (comment out if not needed)
+# weaviate-client
+# pinecone-client
+
+# Translation / NLP
+deep-translator
+nltk
+spacy
+arabic-reshaper
+python-bidi
+huggingface-hub
+
+# Streamlit + Web UI
+streamlit
+streamlit-chat
+streamlit-extras
+gradio
+fastapi
+uvicorn
+
+# Utilities / Helpers
+tqdm
+joblib
+rich
+loguru
+python-dotenv
+requests
+httpx
+
+# Testing & Dev Tools
+pytest
+pytest-asyncio
+black
+isort
+flake8
+mypy
+jupyter
+notebook
+ipykernel
+
+# Optional (data viz + monitoring)
+plotly
+altair
+tensorboard
+wandb
