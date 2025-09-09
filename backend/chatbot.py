@@ -1,6 +1,7 @@
 # backend/chatbot.py
 from ctransformers import AutoModelForCausalLM
 import logging
+import os
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -8,50 +9,43 @@ class ChatBot:
     def __init__(self, model_path: str):
         """
         Initialize Mistral 7B Instruct GGUF model using CTransformers.
+        Threading and device selection is controlled via environment variables.
         """
-        # Use from_pretrained method instead of passing argument directly
-        self.llm = AutoModelForCausalLM.from_pretrained(model_path)
-
-    def _call_model(self, prompt: str, max_tokens: int = 512, stop=None) -> str:
         try:
-            output = self.llm(prompt, max_new_tokens=max_tokens, stop=stop)
-            return output.strip()
+            # Optional: limit threads (default = all CPUs)
+            os.environ["CT_THREADS"] = str(os.cpu_count())  # adjust if needed
+
+            # Optional: force CPU (default automatically uses GPU if available)
+            os.environ["CT_USE_CUDA"] = "0"  # "1" to use GPU
+
+            # Load model
+            self.llm = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                model_type="mistral"  # required
+            )
+            logging.info("Model loaded successfully.")
         except Exception as e:
-            logging.warning(f"LLM call failed: {e}")
-            return "⚠️ Error generating response."
+            logging.error(f"Failed to load model: {e}")
+            raise
 
     def ask(self, query: str, context: str = "") -> str:
-        max_context_len = 700  # Reduced to help prevent token overflow
+        """
+        Generate an answer based on the user's query and optional context.
+        """
+        max_context_len = 700
         context = context[-max_context_len:]
+
         prompt = f"""
 You are AthenaPDF, a helpful AI assistant for students.
 Context: {context}
 Question: {query}
 Answer clearly and concisely:
 """
-        return self._call_model(prompt, max_tokens=256, stop=["Question:"])  # Lowered max_tokens as well
-
-    def summarize(self, text: str, max_tokens=300) -> str:
-        chunk_size = 1500
-        if len(text) > chunk_size:
-            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-            summaries = [self._call_model(f"Summarize clearly for a student:\n\n{chunk}", max_tokens=max_tokens) for chunk in chunks]
-            final_summary = " ".join(summaries)
-            return self._call_model(f"Summarize the following concisely:\n\n{final_summary}", max_tokens=max_tokens)
-        else:
-            return self._call_model(f"Summarize clearly for a student:\n\n{text}", max_tokens=max_tokens)
-
-    def generate_quiz(self, text: str, num_questions=5) -> str:
-        chunk_size = 1500
-        if len(text) > chunk_size:
-            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-            quiz_parts = [
-                self._call_model(
-                    f"Generate {num_questions} multiple-choice questions with answers from this text:\n\n{chunk}",
-                    max_tokens=500
-                ) for chunk in chunks
-            ]
-            return "\n".join(quiz_parts)
-        else:
-            prompt = f"Generate {num_questions} multiple-choice questions (with 4 options each) from the following text:\n\n{text}\nProvide correct answers."
-            return self._call_model(prompt, max_tokens=500)
+        try:
+            output = self.llm(prompt, max_new_tokens=256, stop=["Question:"])
+            if isinstance(output, list):
+                return " ".join(output).strip()
+            return str(output).strip()
+        except Exception as e:
+            logging.warning(f"LLM call failed: {e}")
+            return "⚠️ Error generating response."
