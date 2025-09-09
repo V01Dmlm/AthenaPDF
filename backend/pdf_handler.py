@@ -1,4 +1,4 @@
-# backend/pdf_handler.py
+# backend/pdf_handler.py (Fully Synchronous + CPU/GPU auto + Lazy Images)
 import os
 import fitz  # PyMuPDF
 import faiss
@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import arabic_reshaper
 from bidi.algorithm import get_display
 import logging
+import torch
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,8 +21,14 @@ class PDFHandler:
         os.makedirs(upload_dir, exist_ok=True)
         os.makedirs(vector_dir, exist_ok=True)
 
-        # Auto device selection to avoid meta tensor issues
-        self.embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        # Auto-detect device for embeddings
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logging.info(f"Using device for embeddings: {device}")
+
+        self.embedder = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2",
+            device=device
+        )
 
         self.index_path = os.path.join(vector_dir, "faiss.index")
         self.chunks_path = os.path.join(vector_dir, "chunks.pkl")
@@ -30,11 +37,10 @@ class PDFHandler:
         self.chunks = []
         self.metadata = []
         self.index = None
-
-        # Keep track of images per PDF
         self.pdf_images = {}
 
         self._load_index()
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
     def _load_index(self):
         if os.path.exists(self.index_path) and os.path.exists(self.chunks_path):
@@ -54,53 +60,41 @@ class PDFHandler:
         else:
             self.index = None
 
+    # ----------------- Sync PDF Save -----------------
     def save_pdf(self, file):
-        """
-        Save PDF, extract images, embed text in parallel.
-        Returns list of image paths.
-        """
+        """Save PDF, process text and images synchronously"""
         file_path = os.path.join(self.upload_dir, file.name)
         with open(file_path, "wb") as f:
             f.write(file.getbuffer())
 
-        images = []
+        # Process text and images concurrently
+        text_future = self.executor.submit(self._process_pdf_text, file_path)
+        images_future = self.executor.submit(self.extract_images, file.name)
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(self._process_pdf_text, file_path): "text",
-                executor.submit(self.extract_images, file.name): "images"
-            }
-
-            for future in as_completed(futures):
-                result_type = futures[future]
-                try:
-                    result = future.result()
-                    if result_type == "images":
-                        images = result
-                        self.pdf_images[file.name] = images
-                except Exception as e:
-                    logging.warning(f"{result_type} processing failed: {e}")
-
+        images = images_future.result()
+        text_future.result()  # wait for text processing
         return images
 
+    # ----------------- Text Processing -----------------
     def _process_pdf_text(self, pdf_path: str):
         text = self.extract_text(pdf_path)
         if not text.strip():
             logging.warning(f"No text found in PDF '{pdf_path}'")
             return
 
-        new_chunks = self.chunk_text(text, chunk_size=500, overlap=50)
-        new_metadata = [os.path.basename(pdf_path)] * len(new_chunks)
-        embeddings = self.embedder.encode(new_chunks, convert_to_numpy=True)
+        chunks = self.chunk_text(text, chunk_size=300, overlap=50)
+        metadata = [os.path.basename(pdf_path)] * len(chunks)
+
+        embeddings = self.embedder.encode(chunks, convert_to_numpy=True, show_progress_bar=True)
 
         if self.index is None:
             self.index = faiss.IndexFlatL2(embeddings.shape[1])
         self.index.add(embeddings)
 
-        self.chunks.extend(new_chunks)
-        self.metadata.extend(new_metadata)
+        self.chunks.extend(chunks)
+        self.metadata.extend(metadata)
 
-        # Persist index & chunks
+        # Persist index and chunks
         faiss.write_index(self.index, self.index_path)
         with open(self.chunks_path, "wb") as f:
             pickle.dump(self.chunks, f)
@@ -120,7 +114,7 @@ class PDFHandler:
             logging.warning(f"Failed to read PDF '{pdf_path}': {e}")
             return ""
 
-    def chunk_text(self, text: str, chunk_size=500, overlap=50):
+    def chunk_text(self, text: str, chunk_size=300, overlap=50):
         chunks = []
         start = 0
         while start < len(text):
@@ -129,38 +123,39 @@ class PDFHandler:
             start += chunk_size - overlap
         return chunks
 
+    # ----------------- Image Extraction -----------------
     def extract_images(self, pdf_name: str):
-        """
-        Extracts images from PDF and stores paths in self.pdf_images
-        """
+        """Threaded image extraction"""
         images = []
         pdf_path = os.path.join(self.upload_dir, pdf_name)
         try:
             doc = fitz.open(pdf_path)
+            futures = []
             for page_idx, page in enumerate(doc):
-                for img_idx, img in enumerate(page.get_images(full=True)):
-                    xref = img[0]
-                    base_image = doc.extract_image(xref)
-                    image_bytes = base_image["image"]
-                    ext = base_image["ext"]
-                    img_path = os.path.join(self.upload_dir, f"{pdf_name}_{page_idx}_{img_idx}.{ext}")
-                    with open(img_path, "wb") as f:
-                        f.write(image_bytes)
-                    images.append(img_path)
+                futures.append(self.executor.submit(self._extract_images_from_page, pdf_name, page_idx, page))
+            for future in as_completed(futures):
+                images.extend(future.result())
         except Exception as e:
             logging.warning(f"Failed to extract images from '{pdf_name}': {e}")
         self.pdf_images[pdf_name] = images
         return images
 
-    def get_images_for_pdf(self, pdf_name: str):
-        """
-        Lazy load images for a PDF
-        """
-        if pdf_name in self.pdf_images:
-            return self.pdf_images[pdf_name]
-        return self.extract_images(pdf_name)
+    def _extract_images_from_page(self, pdf_name, page_idx, page):
+        page_images = []
+        for img_idx, img in enumerate(page.get_images(full=True)):
+            xref = img[0]
+            base_image = page.parent.extract_image(xref)
+            image_bytes = base_image["image"]
+            ext = base_image["ext"]
+            img_path = os.path.join(self.upload_dir, f"{pdf_name}_{page_idx}_{img_idx}.{ext}")
+            with open(img_path, "wb") as f:
+                f.write(image_bytes)
+            page_images.append(img_path)
+        return page_images
 
-    def get_context(self, query: str, top_k=3, pdf_files: list = None) -> str:
+    # ----------------- Context Retrieval -----------------
+    def get_context(self, query: str, top_k=3, pdf_files: list = None):
+        """Get top-k context chunks for a query"""
         if not self.index or len(self.chunks) == 0:
             return ""
 
@@ -187,6 +182,7 @@ class PDFHandler:
     def _contains_arabic(self, text: str) -> bool:
         return any("\u0600" <= c <= "\u06FF" for c in text)
 
+    # ----------------- Clear Index -----------------
     def clear_index(self):
         self.index = None
         self.chunks = []
